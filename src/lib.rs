@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use core::mem::MaybeUninit;
 
 #[cfg(not(any(feature = "time", feature = "rdtscp")))]
 use perf_event::{Builder, Group, Counter};
@@ -38,26 +39,59 @@ struct BenchState {
     start_ticks: Option<u64>,
 }
 
+fn fmt_num(n: u64, buf: &mut [MaybeUninit<u8>; 26]) -> &str {
+    let mut tmp = [MaybeUninit::<u8>::uninit(); 20];
+    let mut tmp_len = 0usize;
+
+    if n == 0 {
+        buf[0].write(b'0');
+        return unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf[0].as_ptr(), 1)) };
+    }
+
+    let mut n = n;
+    while n > 0 {
+        tmp[tmp_len].write(b'0' + (n % 10) as u8);
+        tmp_len += 1;
+        n /= 10;
+    }
+
+    let mut out_len = 0usize;
+    for i in (0..tmp_len).rev() {
+        if i > 0 && i % 3 == 0 {
+            buf[out_len].write(b'.');
+            out_len += 1;
+        }
+        buf[out_len].write(unsafe { tmp[i].assume_init() });
+        out_len += 1;
+    }
+
+    unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf[0].as_ptr(), out_len)) }
+}
+
 #[cfg(feature = "rdtscp")]
 unsafe fn rdtscp() -> u64 {
     let lo: u32;
     let hi: u32;
-    core::arch::asm!(
-        "rdtscp",
-        out("eax") lo,
-        out("edx") hi,
-        out("ecx") _,
-        options(nostack, nomem),
-    );
+    unsafe {
+        core::arch::asm!(
+            "rdtscp",
+            out("eax") lo,
+            out("edx") hi,
+            out("ecx") _,
+            options(nostack, nomem),
+        );
+    }
     ((hi as u64) << 32) | (lo as u64)
 }
 
 #[cfg(feature = "rdtscp")]
 unsafe fn lfence() {
-    core::arch::asm!(
-        "lfence",
-        options(nostack, nomem),
-    );
+    unsafe {
+        core::arch::asm!(
+            "lfence",
+            options(nostack, nomem),
+        );
+    }
 }
 
 static BENCH_STATE: OnceLock<Mutex<Option<BenchState>>> = OnceLock::new();
@@ -184,8 +218,9 @@ pub extern "C" fn stop_and_print() {
                 if let Some(start) = state.start_ticks.take() {
                     let end = rdtscp();
                     lfence();
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
                     println!("\n[PERF REPORT]");
-                    println!("  RDTSCP Ticks : {} ticks", end - start);
+                    println!("  RDTSCP Ticks : {} ticks", fmt_num(end - start, &mut buf));
                 }
             }
 
@@ -202,12 +237,16 @@ pub extern "C" fn stop_and_print() {
                         let total_branch = counts[&state.branch_misses];
                         let ipc = if total_cycles > 0 { total_instr as f64 / total_cycles as f64 } else { 0.0 };
 
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
                         println!("\n[PERF REPORT]");
-                        println!("  CPU Core Cycles        : {} cycles", total_cycles);
-                        println!("  Instructions           : {} instructions", total_instr);
+                        println!("  CPU Core Cycles        : {} cycles", fmt_num(total_cycles, &mut buf));
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                        println!("  Instructions           : {} instructions", fmt_num(total_instr, &mut buf));
                         println!("  Instructions Per Cycle : {:.3}", ipc);
-                        println!("  Cache Misses           : {} events", total_cache);
-                        println!("  Branch Misses          : {} events", total_branch);
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                        println!("  Cache Misses           : {} events", fmt_num(total_cache, &mut buf));
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                        println!("  Branch Misses          : {} events", fmt_num(total_branch, &mut buf));
                     }
 
                     #[cfg(feature = "software")]
@@ -217,11 +256,14 @@ pub extern "C" fn stop_and_print() {
                         let ctx_switches = counts[&state.context_switches];
                         let migrations = counts[&state.cpu_migrations];
 
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
                         println!("\n[PERF REPORT]");
                         println!("  Task Clock (Duration) : {:.3} ms", clock as f64 / 1_000_000.0);
-                        println!("  Page Faults           : {} events", faults);
-                        println!("  Context Switches      : {} events", ctx_switches);
-                        println!("  CPU Migrations        : {} events", migrations);
+                        println!("  Page Faults           : {} events", fmt_num(faults, &mut buf));
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                        println!("  Context Switches      : {} events", fmt_num(ctx_switches, &mut buf));
+                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                        println!("  CPU Migrations        : {} events", fmt_num(migrations, &mut buf));
                     }
                 }
             }
