@@ -57,7 +57,8 @@ fn fmt_num(n: u64, buf: &mut [MaybeUninit<u8>; 26]) -> &str {
 
     let mut out_len = 0usize;
     for i in (0..tmp_len).rev() {
-        if i > 0 && i % 3 == 0 {
+        let pos_from_right = tmp_len - 1 - i;
+        if pos_from_right > 0 && pos_from_right % 3 == 0 {
             buf[out_len].write(b'.');
             out_len += 1;
         }
