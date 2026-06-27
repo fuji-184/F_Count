@@ -4,16 +4,37 @@ use std::thread;
 use std::time::Duration;
 use core::mem::MaybeUninit;
 
-#[cfg(not(any(feature = "time", feature = "rdtscp")))]
+#[cfg(not(any(feature = "time", feature = "rdtscp", feature = "software", feature = "hardware")))]
+compile_error!("Select one feature: hardware, software, rdtscp, or time");
+
+#[cfg(all(feature = "hardware", feature = "software"))]
+compile_error!("Features hardware and software are mutually exclusive");
+
+#[cfg(all(feature = "hardware", feature = "rdtscp"))]
+compile_error!("Features hardware and rdtscp are mutually exclusive");
+
+#[cfg(all(feature = "hardware", feature = "time"))]
+compile_error!("Features hardware and time are mutually exclusive");
+
+#[cfg(all(feature = "software", feature = "rdtscp"))]
+compile_error!("Features software and rdtscp are mutually exclusive");
+
+#[cfg(all(feature = "software", feature = "time"))]
+compile_error!("Features software and time are mutually exclusive");
+
+#[cfg(all(feature = "rdtscp", feature = "time"))]
+compile_error!("Features rdtscp and time are mutually exclusive");
+
+#[cfg(any(feature = "hardware", feature = "software"))]
 use perf_event::{Builder, Group, Counter};
-#[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
+#[cfg(feature = "hardware")]
 use perf_event::events::Hardware;
-#[cfg(all(feature = "software", not(feature = "time"), not(feature = "rdtscp")))]
+#[cfg(feature = "software")]
 use perf_event::events::Software;
 #[cfg(feature = "time")]
 use std::time::Instant;
 
-#[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
+#[cfg(feature = "hardware")]
 struct BenchState {
     group: Group,
     cycles: Counter,
@@ -22,7 +43,7 @@ struct BenchState {
     branch_misses: Counter,
 }
 
-#[cfg(all(feature = "software", not(feature = "time"), not(feature = "rdtscp")))]
+#[cfg(feature = "software")]
 struct BenchState {
     group: Group,
     task_clock: Counter,
@@ -123,65 +144,70 @@ pub extern "C" fn init() -> i32 {
         return 0;
     }
 
-    #[cfg(not(any(feature = "time", feature = "rdtscp")))]
+    #[cfg(feature = "hardware")]
     {
         let mut group = match Group::new() {
             Ok(g) => g,
             Err(_) => return -1,
         };
 
-        #[cfg(not(feature = "software"))]
-        {
-            let cycles = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::CPU_CYCLES).build() {
-                Ok(c) => c,
-                Err(_) => return -2,
-            };
+        let cycles = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::CPU_CYCLES).build() {
+            Ok(c) => c,
+            Err(_) => return -2,
+        };
 
-            let instr = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::INSTRUCTIONS).build() {
-                Ok(i) => i,
-                Err(_) => return -3,
-            };
+        let instr = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::INSTRUCTIONS).build() {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
 
-            let cache_misses = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::CACHE_MISSES).build() {
-                Ok(c) => c,
-                Err(_) => return -4,
-            };
+        let cache_misses = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::CACHE_MISSES).build() {
+            Ok(c) => c,
+            Err(_) => return -4,
+        };
 
-            let branch_misses = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::BRANCH_MISSES).build() {
-                Ok(b) => b,
-                Err(_) => return -5,
-            };
+        let branch_misses = match { let mut b = Builder::new(); b.exclude_kernel(true); b }.group(&mut group).kind(Hardware::BRANCH_MISSES).build() {
+            Ok(b) => b,
+            Err(_) => return -5,
+        };
 
-            *guard = Some(BenchState { group, cycles, instr, cache_misses, branch_misses });
-        }
-
-        #[cfg(feature = "software")]
-        {
-            let task_clock = match Builder::new().group(&mut group).kind(Software::TASK_CLOCK).build() {
-                Ok(c) => c,
-                Err(_) => return -2,
-            };
-
-            let page_faults = match Builder::new().group(&mut group).kind(Software::PAGE_FAULTS).build() {
-                Ok(i) => i,
-                Err(_) => return -3,
-            };
-
-            let context_switches = match Builder::new().group(&mut group).kind(Software::CONTEXT_SWITCHES).build() {
-                Ok(c) => c,
-                Err(_) => return -4,
-            };
-
-            let cpu_migrations = match Builder::new().group(&mut group).kind(Software::CPU_MIGRATIONS).build() {
-                Ok(b) => b,
-                Err(_) => return -5,
-            };
-
-            *guard = Some(BenchState { group, task_clock, page_faults, context_switches, cpu_migrations });
-        }
-
-        0
+        *guard = Some(BenchState { group, cycles, instr, cache_misses, branch_misses });
+        return 0;
     }
+
+    #[cfg(feature = "software")]
+    {
+        let mut group = match Group::new() {
+            Ok(g) => g,
+            Err(_) => return -1,
+        };
+
+        let task_clock = match Builder::new().group(&mut group).kind(Software::TASK_CLOCK).build() {
+            Ok(c) => c,
+            Err(_) => return -2,
+        };
+
+        let page_faults = match Builder::new().group(&mut group).kind(Software::PAGE_FAULTS).build() {
+            Ok(i) => i,
+            Err(_) => return -3,
+        };
+
+        let context_switches = match Builder::new().group(&mut group).kind(Software::CONTEXT_SWITCHES).build() {
+            Ok(c) => c,
+            Err(_) => return -4,
+        };
+
+        let cpu_migrations = match Builder::new().group(&mut group).kind(Software::CPU_MIGRATIONS).build() {
+            Ok(b) => b,
+            Err(_) => return -5,
+        };
+
+        *guard = Some(BenchState { group, task_clock, page_faults, context_switches, cpu_migrations });
+        return 0;
+    }
+
+    #[allow(unreachable_code)]
+    0
 }
 
 #[unsafe(no_mangle)]
@@ -202,7 +228,7 @@ pub extern "C" fn start() {
                 state.start_ticks = Some(rdtscp());
             }
 
-            #[cfg(not(any(feature = "time", feature = "rdtscp")))]
+            #[cfg(any(feature = "hardware", feature = "software"))]
             {
                 let _ = state.group.reset();
                 let _ = state.group.enable();
@@ -235,47 +261,48 @@ pub extern "C" fn stop_and_print() {
                 }
             }
 
-            #[cfg(not(any(feature = "time", feature = "rdtscp")))]
+            #[cfg(feature = "hardware")]
             {
                 let _ = state.group.disable();
 
                 if let Ok(counts) = state.group.read() {
-                    #[cfg(not(feature = "software"))]
-                    {
-                        let total_cycles = counts[&state.cycles];
-                        let total_instr = counts[&state.instr];
-                        let total_cache = counts[&state.cache_misses];
-                        let total_branch = counts[&state.branch_misses];
-                        let ipc = if total_cycles > 0 { total_instr as f64 / total_cycles as f64 } else { 0.0 };
+                    let total_cycles = counts[&state.cycles];
+                    let total_instr = counts[&state.instr];
+                    let total_cache = counts[&state.cache_misses];
+                    let total_branch = counts[&state.branch_misses];
+                    let ipc = if total_cycles > 0 { total_instr as f64 / total_cycles as f64 } else { 0.0 };
 
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("\n[PERF REPORT]");
-                        println!("  CPU Core Cycles        : {} cycles", fmt_num(total_cycles, &mut buf));
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("  Instructions           : {} instructions", fmt_num(total_instr, &mut buf));
-                        println!("  Instructions Per Cycle : {:.3}", ipc);
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("  Cache Misses           : {} events", fmt_num(total_cache, &mut buf));
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("  Branch Misses          : {} events", fmt_num(total_branch, &mut buf));
-                    }
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("\n[PERF REPORT]");
+                    println!("  CPU Core Cycles        : {} cycles", fmt_num(total_cycles, &mut buf));
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("  Instructions           : {} instructions", fmt_num(total_instr, &mut buf));
+                    println!("  Instructions Per Cycle : {:.3}", ipc);
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("  Cache Misses           : {} events", fmt_num(total_cache, &mut buf));
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("  Branch Misses          : {} events", fmt_num(total_branch, &mut buf));
+                }
+            }
 
-                    #[cfg(feature = "software")]
-                    {
-                        let clock = counts[&state.task_clock];
-                        let faults = counts[&state.page_faults];
-                        let ctx_switches = counts[&state.context_switches];
-                        let migrations = counts[&state.cpu_migrations];
+            #[cfg(feature = "software")]
+            {
+                let _ = state.group.disable();
 
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("\n[PERF REPORT]");
-                        println!("  Task Clock (Duration) : {:.3} ms", clock as f64 / 1_000_000.0);
-                        println!("  Page Faults           : {} events", fmt_num(faults, &mut buf));
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("  Context Switches      : {} events", fmt_num(ctx_switches, &mut buf));
-                        let mut buf = [MaybeUninit::<u8>::uninit(); 26];
-                        println!("  CPU Migrations        : {} events", fmt_num(migrations, &mut buf));
-                    }
+                if let Ok(counts) = state.group.read() {
+                    let clock = counts[&state.task_clock];
+                    let faults = counts[&state.page_faults];
+                    let ctx_switches = counts[&state.context_switches];
+                    let migrations = counts[&state.cpu_migrations];
+
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("\n[PERF REPORT]");
+                    println!("  Task Clock (Duration) : {:.3} ms", clock as f64 / 1_000_000.0);
+                    println!("  Page Faults           : {} events", fmt_num(faults, &mut buf));
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("  Context Switches      : {} events", fmt_num(ctx_switches, &mut buf));
+                    let mut buf = [MaybeUninit::<u8>::uninit(); 26];
+                    println!("  CPU Migrations        : {} events", fmt_num(migrations, &mut buf));
                 }
             }
         }

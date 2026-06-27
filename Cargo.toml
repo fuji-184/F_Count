@@ -7,9 +7,11 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [features]
-software = []
+default = []
+hardware = ["dep:perf-event"]
+software = ["dep:perf-event"]
 time = []
 rdtscp = []
 
 [dependencies]
-perf-event = "0.4.9"
+perf-event = { version = "0.4.9", optional = true }
