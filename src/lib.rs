@@ -1,8 +1,7 @@
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-#[cfg(not(feature = "time"))]
-#[cfg(not(feature = "rdtscp"))]
+#[cfg(not(any(feature = "time", feature = "rdtscp")))]
 use perf_event::{Builder, Group, Counter};
 #[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
 use perf_event::events::Hardware;
@@ -10,8 +9,6 @@ use perf_event::events::Hardware;
 use perf_event::events::Software;
 #[cfg(feature = "time")]
 use std::time::Instant;
-#[cfg(feature = "rdtscp")]
-use core::arch::x86_64::{_rdtscp, _mm_lfence};
 
 #[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
 struct BenchState {
@@ -39,6 +36,28 @@ struct BenchState {
 #[cfg(feature = "rdtscp")]
 struct BenchState {
     start_ticks: Option<u64>,
+}
+
+#[cfg(feature = "rdtscp")]
+unsafe fn rdtscp() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    core::arch::asm!(
+        "rdtscp",
+        out("eax") lo,
+        out("edx") hi,
+        out("ecx") _,
+        options(nostack, nomem),
+    );
+    ((hi as u64) << 32) | (lo as u64)
+}
+
+#[cfg(feature = "rdtscp")]
+unsafe fn lfence() {
+    core::arch::asm!(
+        "lfence",
+        options(nostack, nomem),
+    );
 }
 
 static BENCH_STATE: OnceLock<Mutex<Option<BenchState>>> = OnceLock::new();
@@ -134,9 +153,8 @@ pub extern "C" fn start() {
 
             #[cfg(feature = "rdtscp")]
             unsafe {
-                _mm_lfence();
-                let mut aux = 0u32;
-                state.start_ticks = Some(_rdtscp(&mut aux));
+                lfence();
+                state.start_ticks = Some(rdtscp());
             }
 
             #[cfg(not(any(feature = "time", feature = "rdtscp")))]
@@ -164,9 +182,8 @@ pub extern "C" fn stop_and_print() {
             #[cfg(feature = "rdtscp")]
             unsafe {
                 if let Some(start) = state.start_ticks.take() {
-                    let mut aux = 0u32;
-                    let end = _rdtscp(&mut aux);
-                    _mm_lfence();
+                    let end = rdtscp();
+                    lfence();
                     println!("\n[PERF REPORT]");
                     println!("  RDTSCP Ticks : {} ticks", end - start);
                 }
