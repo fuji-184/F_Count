@@ -2,15 +2,18 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 #[cfg(not(feature = "time"))]
+#[cfg(not(feature = "rdtscp"))]
 use perf_event::{Builder, Group, Counter};
-#[cfg(all(not(feature = "software"), not(feature = "time")))]
+#[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
 use perf_event::events::Hardware;
-#[cfg(all(feature = "software", not(feature = "time")))]
+#[cfg(all(feature = "software", not(feature = "time"), not(feature = "rdtscp")))]
 use perf_event::events::Software;
 #[cfg(feature = "time")]
 use std::time::Instant;
+#[cfg(feature = "rdtscp")]
+use core::arch::x86_64::{_rdtscp, _mm_lfence};
 
-#[cfg(all(not(feature = "software"), not(feature = "time")))]
+#[cfg(all(not(feature = "software"), not(feature = "time"), not(feature = "rdtscp")))]
 struct BenchState {
     group: Group,
     cycles: Counter,
@@ -19,7 +22,7 @@ struct BenchState {
     branch_misses: Counter,
 }
 
-#[cfg(all(feature = "software", not(feature = "time")))]
+#[cfg(all(feature = "software", not(feature = "time"), not(feature = "rdtscp")))]
 struct BenchState {
     group: Group,
     task_clock: Counter,
@@ -31,6 +34,11 @@ struct BenchState {
 #[cfg(feature = "time")]
 struct BenchState {
     timer: Option<Instant>,
+}
+
+#[cfg(feature = "rdtscp")]
+struct BenchState {
+    start_ticks: Option<u64>,
 }
 
 static BENCH_STATE: OnceLock<Mutex<Option<BenchState>>> = OnceLock::new();
@@ -47,7 +55,13 @@ pub extern "C" fn init() -> i32 {
         return 0;
     }
 
-    #[cfg(not(feature = "time"))]
+    #[cfg(feature = "rdtscp")]
+    {
+        *guard = Some(BenchState { start_ticks: None });
+        return 0;
+    }
+
+    #[cfg(not(any(feature = "time", feature = "rdtscp")))]
     {
         let mut group = match Group::new() {
             Ok(g) => g,
@@ -118,7 +132,14 @@ pub extern "C" fn start() {
                 state.timer = Some(Instant::now());
             }
 
-            #[cfg(not(feature = "time"))]
+            #[cfg(feature = "rdtscp")]
+            unsafe {
+                _mm_lfence();
+                let mut aux = 0u32;
+                state.start_ticks = Some(_rdtscp(&mut aux));
+            }
+
+            #[cfg(not(any(feature = "time", feature = "rdtscp")))]
             {
                 let _ = state.group.reset();
                 let _ = state.group.enable();
@@ -140,7 +161,18 @@ pub extern "C" fn stop_and_print() {
                 }
             }
 
-            #[cfg(not(feature = "time"))]
+            #[cfg(feature = "rdtscp")]
+            unsafe {
+                if let Some(start) = state.start_ticks.take() {
+                    let mut aux = 0u32;
+                    let end = _rdtscp(&mut aux);
+                    _mm_lfence();
+                    println!("\n[PERF REPORT]");
+                    println!("  RDTSCP Ticks : {} ticks", end - start);
+                }
+            }
+
+            #[cfg(not(any(feature = "time", feature = "rdtscp")))]
             {
                 let _ = state.group.disable();
 

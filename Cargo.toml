@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 [features]
 software = []
 time = []
+rdtscp = []
 
 [dependencies]
 perf-event = "0.4.9"
