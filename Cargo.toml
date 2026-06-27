@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [features]
 software = []
+time = []
 
 [dependencies]
 perf-event = "0.4.9"
