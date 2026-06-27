@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
 use core::mem::MaybeUninit;
 
 #[cfg(not(any(feature = "time", feature = "rdtscp")))]
@@ -39,7 +41,7 @@ struct BenchState {
     start_ticks: Option<u64>,
 }
 
-fn fmt_num(n: u64, buf: &mut [MaybeUninit<u8>; 26]) -> &str {
+fn fmt_num(mut n: u64, buf: &mut [MaybeUninit<u8>; 26]) -> &str {
     let mut tmp = [MaybeUninit::<u8>::uninit(); 20];
     let mut tmp_len = 0usize;
 
@@ -48,22 +50,28 @@ fn fmt_num(n: u64, buf: &mut [MaybeUninit<u8>; 26]) -> &str {
         return unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf[0].as_ptr(), 1)) };
     }
 
-    let mut n = n;
     while n > 0 {
-        tmp[tmp_len].write(b'0' + (n % 10) as u8);
+        let q = n / 10;
+        let r = n - q * 10;
+        tmp[tmp_len].write(b'0' + r as u8);
         tmp_len += 1;
-        n /= 10;
+        n = q;
     }
 
     let mut out_len = 0usize;
+    let mut next_dot = tmp_len - (tmp_len / 3) * 3;
+    if next_dot == 0 { next_dot = 3; }
+    let mut count = 0usize;
+
     for i in (0..tmp_len).rev() {
-        let pos_from_right = tmp_len - 1 - i;
-        if pos_from_right > 0 && pos_from_right % 3 == 0 {
+        if count == next_dot && i != tmp_len - 1 {
             buf[out_len].write(b'.');
             out_len += 1;
+            next_dot += 3;
         }
         buf[out_len].write(unsafe { tmp[i].assume_init() });
         out_len += 1;
+        count += 1;
     }
 
     unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(buf[0].as_ptr(), out_len)) }
@@ -178,6 +186,8 @@ pub extern "C" fn init() -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn start() {
+    thread::sleep(Duration::from_secs(1));
+
     if let Some(mutex) = BENCH_STATE.get() {
         let mut guard = mutex.lock().unwrap();
         if let Some(ref mut state) = *guard {
